@@ -1,0 +1,851 @@
+---
+title: "Practica Detección de Anomalias"
+author: "David Pérez Román"
+date: "2023-04-10"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{=html}
+<style>
+body {
+text-align: justify}
+</style>
+```
+
+------------------------------------------------------------------------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(nortest)
+library(conflicted)
+source(file = here::here("packages", "OutliersLibrerias.R"))
+source(file = here::here("packages", "OutliersFunciones_byCubero.R"))
+```
+
+# Dataset y Selección de Variables
+
+El dataset empleado es el Vertebral Column Dataset de UCI Machine Learning Repository, el cual ha sido modificado para la detección de outliers, obtenido de: [ODDS](http://odds.cs.stonybrook.edu/vertebral-dataset/). Se trata de un dataset con 240 instancias donde se utiliza la siguiente convención para las clases: Normal (NO) y Anormal (AB) que hacen referencia a la desviación de la columna vertebral del paciente. Aquí, "AB" es la clase mayoritaria que tiene 210 instancias que se utilizan como inliers y "NO" se reduce de 100 a 30 instancias como outliers. El dataset descargado de la pagina ODDS tiene formato .mat (archivo de matlab), para poder trabajar más fácilmente con el dataset se convierte a CSV antes de leerlo en R
+
+## Variables
+
+El dataset cuenta con 6 variables predictoras y una variable clase con dos clases AB y NO, como se expone en la descripción del dataset. Las variables predictoras son todas numéricas y hacen referencia a diferentes características de la columna vertebral de un ser humano:
+
+-   **pelvic_incidence:** Es el ángulo entre la línea perpendicular al punto medio del platillo sacro y la línea que va desde ese mismo punto al eje de la cabeza femoral.
+
+-   **pelvic_tilt:** Hace referencia al ángulo orientación de la pelvis con respecto a los fémures y al resto del cuerpo.
+
+-   **lumbar_lordosis_angle:** Hace referencia al ángulo de la curva natural interior de la parte baja de la espalda.
+
+-   **sacral_slope:** Se trata de un ángulo subtendido por una línea paralela a la placa terminal sacra y una línea de referencia horizontal.
+
+-   **pelvic_radius:** Es la distancia desde el eje de la cadera hasta la esquina posterosuperior de la placa terminal S1.
+
+-   **degree_spondylolisthesis:** Mide el grado de espondilolistesis, una afección de la columna que causa dolor en la parte baja de la espalda. Ocurre cuando una de las vértebras se desliza fuera de lugar sobre la vértebra debajo de ella.
+
+-   **Class:** La variable clase puede tomar dos valores, AB o NO, que en este caso se han transformado en 0 y 11 respectivamente.
+
+Para trabajar con el dataset, se van a construir los siguientes objetos:
+
+-   `dataset`: Frame de datos que contendrá el dataset `vertebral`.
+
+-   `dataset.num`: Frame obtenido a partir de `datos` utilizando sólo las columnas de tipo numérico. En principio todas las columnas del dataset son numéricas, pero se comprobará de todos modos.
+
+-   `indice.columna`: Índice de la columna de `datos` con la que se quiera trabajar.
+
+-   `columna`: Contendrá la columna de `dataset` correspondiente a `indice.columna`.
+
+-   `nombre.columna`: Nombre de la columna correspondiente a `indice.columna`.
+
+Una vez determinados los objetospodemos empezar a trabajar con ellos:
+
+```{r}
+dataset <- read.csv(here::here("data", "vertebral.csv"))
+columnas.num <- sapply(c(1:ncol(dataset)), function(x) is.numeric(dataset[,x]))
+columnas.num
+dataset.num <- dataset[, columnas.num]
+
+```
+
+Como se puede apreciar, tal y como se sabía, todas las columnas son numéricas. Por lo que el objeto `dataset.num` será igual que el objeto `dataset`. Adicionalmente, empleamos `na.omit()` para eliminar cualquier valor perdido en el dataset.
+
+```{r, echo=FALSE}
+dataset.num <- na.omit(dataset.num)
+```
+
+Podemos ver las primeras líneas del dataset con la función `head()`:
+
+```{r}
+head(dataset.num)
+```
+
+Como no hay ninguna variable con poca variación de valores (salvo la variable clase), se decide proseguir con todas las variables (la variable clase se excluirá en aquellas pruebas donde no sea necesaria)
+
+# Detección de outliers en una dimensión
+
+En este apartado se van a calcular los outliers 1-variantes
+
+## Outliers IQR
+
+En este apartado se va a aplicar el método IQR, pero para aplicarlo debemos comprobar primero si las variables siguen una distribución normal, para ello obtendremos los histogramas de las diferentes variables. En este caso omitiremos la variable clase:
+
+```{r}
+par(mfrow = c(2,3))
+invisible(sapply(c(1:ncol(dataset.num[,-7])), function(x) hist(dataset.num[,x], main="", xlab=names(dataset.num)[x])))
+```
+
+A simple vista, la distribución de todas las variables se asemeja a una normal. Aunque en algunos casos se asemeja más que en otros, siendo `pelvic_incidence`, el más alejado. Aun así, se decide continuar con el estudio de todas las variables.
+
+A falta de más información, seleccionamos cualquiera de ellas. Decidimos seleccionar `lumbar_lordosis_angle` puesto que se asemeja bastante a una normal. Establecemos las variables para trabajar más fácilmente con esta columna:
+
+```{r}
+indice.columna <- 3
+columna        <- dataset.num[, indice.columna]
+nombre.columna <- names(dataset.num) [indice.columna]
+```
+
+### Obtención de los outliers IQR
+
+Empezamos calculando el primer y tercer cuartil, así como la distancia inter cuartil (IQR), también obtenemos los extremos que delimitan los outliers. Con esta información construiremos los dos vectores `son.outliers.IQR` y `son.outliers.IQR.extremos` que nos indicarán si cada registro es un outlier dada la columna fijada.
+
+```{r}
+cuartil.primero <- quantile(columna, 0.25)
+cuartil.tercero <- quantile(columna, 0.75)
+mediana <- quantile(columna, 0.50)
+
+iqr <- IQR(columna)
+
+extremo.superior.outlier.IQR <- cuartil.tercero + (1.5*iqr) 
+extremo.inferior.outlier.IQR <- cuartil.primero - (1.5*iqr) 
+extremo.superior.outlier.IQR.extremo <- cuartil.tercero + (3*iqr)
+extremo.inferior.outlier.IQR.extremo <- cuartil.primero - (3*iqr)
+
+son.outliers.IQR <- dataset.num[, indice.columna] > extremo.superior.outlier.IQR | dataset.num[, indice.columna] < extremo.inferior.outlier.IQR
+
+son.outliers.IQR.extremos <- dataset.num[, indice.columna] > extremo.superior.outlier.IQR.extremo | dataset.num[, indice.columna] < extremo.inferior.outlier.IQR.extremo
+
+
+cuartil.primero 
+cuartil.tercero 
+mediana
+iqr 
+extremo.superior.outlier.IQR
+extremo.inferior.outlier.IQR
+extremo.superior.outlier.IQR.extremo
+extremo.inferior.outlier.IQR.extremo
+head(son.outliers.IQR)
+sum(son.outliers.IQR)
+head(son.outliers.IQR.extremos)
+sum(son.outliers.IQR.extremos)
+```
+
+### Índices y valores de los outliers IQR
+
+Se procede a obtener los índices de las filas que contienen un outlier en la columna que se ha seleccionado, así como el valor correspondiente en dicha columna:
+
+```{r}
+claves.outliers.IQR <- which(son.outliers.IQR) 
+
+df.outliers.IQR <- dataset.num[claves.outliers.IQR,]
+
+nombres.outliers.IQR <- row.names(df.outliers.IQR)
+
+valores.outliers.IQR <- df.outliers.IQR[, indice.columna]
+
+claves.outliers.IQR.extremo <- which(son.outliers.IQR.extremos) 
+
+df.outliers.IQR.extremo <- dataset.num[claves.outliers.IQR.extremo,]
+
+nombres.outliers.IQR.extremo <- row.names(df.outliers.IQR.extremo)
+
+valores.outliers.IQR.extremo <- df.outliers.IQR.extremo[, indice.columna]
+
+
+claves.outliers.IQR
+df.outliers.IQR
+nombres.outliers.IQR
+valores.outliers.IQR
+claves.outliers.IQR.extremo
+df.outliers.IQR.extremo
+nombres.outliers.IQR.extremo
+valores.outliers.IQR.extremo
+```
+
+### Cómputo de los outliers IQR con funciones
+
+Los resultados del apartado anterior se podrían haber obtenido empleando las funciones disponibles en `OutliersFunciones_byCubero.R`. En futuros apartados se emplearán estas funciones en los casos en los que sea necesario.
+
+### Desviación de los outliers con respecto a la media de la columna
+
+En este apartado se va a ver cuánto se desvía cada outlier de la media de cada columna. Para ello se emplearán los datos normalizados mediante el método de z-score.
+
+Para normalizar los datos se empleará la función `scale()`con la que se obtiene el objeto `dataset.num.norm` y `columna.norm`. Se pueden ver los datos empleando `head()`:
+
+```{r, echo=FALSE}
+dataset.num.norm <- scale(dataset.num)
+head(dataset.num.norm)
+columna.norm <- dataset.num.norm[, indice.columna]
+```
+
+Para ver los valores normalizados de los outliers, se construirá la variable `valores.outliers.IQR.norm`:
+
+```{r}
+valores.outliers.IQR.norm <- columna.norm[son.outliers.IQR]
+valores.outliers.IQR.norm
+```
+
+Como se puede observar, tras normalizar los datos, el valor del outlier es bastante elevado. Si se tuviese certeza estadística de que la variable sigue una distribución normal se podría afirmar de que efectivamente dicho registro se trata de un outlier.
+
+A continuación, se procede a observar el comportamiento de los outliers en la columna seleccionada con respecto al resto de columnas. Para ello, se seleccionarán los datos correspondientes del conjunto de datos normalizado:
+
+```{r}
+dataset.num.norm.outliers.IQR <- dataset.num.norm[son.outliers.IQR,]
+dataset.num.norm.outliers.IQR
+```
+
+Se puede apreciar como este registro (paciente nº 198) solo presenta un valor excesivo en la columna `lumbar_lordosis_angle`. La única otra columna donde presenta un valor algo elevado es en `degree_spondylolisthesis`. Lo cual puede tener sentido puesto que la morfología pélvica puede desempeñar un papel en el desarrollo de la espondilolistesis.
+
+### Gráfico
+
+A continuación se mostrará un gráfico con los valores de los registros, para ello se empleará la fnución `plot_dos_coores()`. En el gráfico podremos ver los registros como puntos negros y los outliers como puntos rojos. Se aplicará la función tanto para los outliers como para los outliers extremos que, como no se había obtenido ninguno, no se debería ver ningún punto rojo en el gráfico.
+
+```{r}
+plot_2_colores(columna.norm, claves.outliers.IQR, "lumbar_lordosis_angle")
+
+plot_2_colores(columna.norm, claves.outliers.IQR.extremo, "lumbar_lordosis_angle")
+```
+
+### Diagramas de cajas
+
+A continuación se mostrará un diagrama de cajas con los valores de los registros, para ello se empleará la función `diag_caja_outliers_IQR()`.
+
+```{r}
+diag_caja_outliers_IQR(dataset.num.norm, indice.columna)
+```
+
+Asimismo, para ver las etiquetas de los outliers se puede emplear la función `diag_caja()` que nos mostrará los nombres de los registros que indiquemos como outliers:
+
+```{r}
+diag_caja(dataset.num.norm, indice.columna, claves.outliers.IQR)
+```
+
+No se muestran los resultados con los outliers extremos ya que no hay ninguno en la columna seleccionada.
+
+Finalmente, para ver los diagramas de cajas de todas las variables se puede emplear la función `diag_caja_juntos()`, la cual también mostrará el nombre del registro que se indique. Se excluirá la variable clase de los diagramas.
+
+```{r, warning=FALSE}
+diag_caja_juntos(dataset.num.norm[,-7], "Outliers en alguna columna", claves.outliers.IQR)
+```
+
+Tal y como se había analizado anteriormente, el `paciente nº198` (que es un outlier IQR con respecto a `lumbar_lordosis_angle`) no tiene valores anormales en el resto de columnas (aunque tal vez con la excepción de la variable `degree_spondylolisthesis`).
+
+## Tests de hipótesis
+
+### Objetivo
+
+En este apartado se va a determinar mediante un test de hipótesis si el valor más alejado de la media puede considerarse un outlier. Para ello se empleará el test de Grubbs, donde se planteará la siguiente hipótesis nula:
+
+***H0: El valor más alejado de la media proviene de la misma distribución que el resto de datos***.
+
+### Comprobación de la hipótesis de Normalidad
+
+Para poder emplear el test de Grubbs se debe tener en cuenta que este asume que los datos siguen una distribución normal sin tener en cuenta al outlier, por lo que se deberá comprobar la normalidad de los datos si se rechaza la hipótesis nula del test para poder afirmar, con certeza estadística, que el valor se trata de un outlier.
+
+En primer lugar, se comprobará de una forma informal que los datos siguen una distribución Normal. Se hará visualmente analizando el histograma. Utilizando todos los datos (incluidos los posibles outliers que pudiese haber). Para ver la curva Normal que mejor se ajusta al histograma, se empleará la función `denscomp` del paquete `fitdistrplus`:
+
+```{r, warning=FALSE}
+ajusteNormal = fitdist(columna , "norm")
+denscomp (ajusteNormal,  xlab = nombre.columna)
+```
+
+Se puede observar que, efectivamente, se puede suponer que la distribución subyacente es una Normal.
+
+### Test de Grubbs
+
+Una vez que se ha visto que los datos siguen una distribución no demasiado alejada de la Normal, se procede a aplicar el test de Grubbs. Para ello, se emplea la función `grubbs.test` del paquete `outliers` y se observa la propiedad `p.value`:
+
+```{r}
+test.de.Grubbs <- grubbs.test(columna, two.sided = TRUE)
+test.de.Grubbs$p.value
+```
+
+El p-value es \< 0.05, por lo que se puede rechazar la hipótesis nula y confirmar que el `paciente nº198` es, efectivamente, un outlier. El test de Grubbs solo indica si el valor más alejado es un outlier o no, pero no dice de que valor se trata. En este caso es conocido porque se ha hecho un estudio previo, pero en caso opuesto será necesario emplear función `outlier` del paquete `outliers`, la cual no realiza ningún test, pero da información referente a las diferencias de cada valor con respecto a la media. Si se desea conocer el nombre del outlier se deberán realizar algunos pasos más:
+
+```{r}
+valor_posible_outlier <- outlier(columna)
+valor_posible_outlier
+es_posible_outlier <- outlier(columna, logical = TRUE)
+clave_posible_outlier <- which(es_posible_outlier)
+clave_posible_outlier
+```
+
+### Test de Normalidad
+
+Como se ha mencionado en apartados anteriores, el test de Grubbs asume la normalidad de la distribución, por lo que se debe comprobar con certeza estadística si la distribución realmente es normal. Si no lo es, no se podrá aceptar la hipótesis alternativa y no será posible asegurar con certeza estadística que el registro es un outlier.
+
+Para comprobar la normalidad de la distribución primero se establece la siguiente hipótesis nula:
+
+***H0: La distribución subyacente de la variable es una Normal***
+
+En función del número de datos se debe emplear un test u otro, como el dataset cuenta con 240 observaciones, no se puede emplear el test de `Shapiro-Willks`, por lo que será necesario emplear el test de `Kolomogorov-Smirnov` el cual se empleará con la variante de Lilliefors.
+
+```{r}
+columna.sin.outlier <- columna[-clave_posible_outlier]
+
+lillie.test(columna.sin.outlier)
+
+goodness_fit = gofstat(ajusteNormal)
+goodness_fit$adtest
+
+```
+
+El test de `Anderson-Darling` no se ha podido aplicar porque hay pocos datos. El test de `Kolomogorov-Smirnov` no puede rechazar la hipótesis nula de Normalidad (p-value \> 0.05) Así pues, se puede asumir que los datos no contradicen que la distribución subyacente sea una Normal.
+
+En resumen, se puede concluir que los valores presentes en `lumbar_lordosis_angle` son compatibles con una distribución Normal y que el registro `198` con un valor de `125.74` es el que más se aleja de la media y puede considerarse un outlier con garantía estadística según el test de Grubbs.
+
+Para poder emplear este proceso de forma mas sencilla se crea una función que realice todo el proceso. (En la plantilla proporcionada se solicita que se emplea el test de Shapiro, pero como en el caso estudiado no se puede aplicar se creará la función con el test de Kolmogorov-Smirnov con la variante de Lilliefors):
+
+```{r}
+#######################################################################
+# Aplica el test de Grubbs sobre la columna ind.col de datos y devuelve una lista con:
+
+# nombre.columna: Nombre de la columna datos[, ind.col]
+# clave.mas.alejado.media: Clave del valor O que está más alejado de la media
+# valor.mas.alejado.media: Valor de O en datos[, ind.col]
+# nombre.mas.alejado.media: Nombre de O en datos
+# es.outlier: TRUE/FALSE dependiendo del resultado del test de Grubbs sobre O
+# p.value:  p-value calculado por el test de Grubbs
+# es.distrib.norm: Resultado de aplicar el test de Normalidad 
+#    de Kolmogorov-Smirnov sobre datos[, ind.col]
+#    El test de normalidad se aplica sin tener en cuenta el 
+#    valor más alejado de la media (el posible outlier O)
+#    TRUE si el test no ha podido rechazar
+#       -> Sólo podemos concluir que los datos no contradicen una Normal
+#    FALSE si el test rechaza 
+#       -> Los datos no siguen una Normal
+
+# Requiere el paquete outliers
+
+test_Grubbs = function(data.frame, indice.columna, alpha = 0.05) {
+  
+  nombre.columna <- names(data.frame) [indice.columna]
+  es_posible_outlier <- outlier(data.frame[, indice.columna], logical = TRUE)
+  clave.mas.alejado.media <- which(es_posible_outlier)
+  valor.mas.alejado.media <- data.frame[clave.mas.alejado.media, indice.columna]
+  nombre.mas.alejado.media <- row.names(data.frame)[clave.mas.alejado.media]
+  grubbs <- grubbs.test(data.frame[, indice.columna], two.sided = TRUE)
+  p.value <- grubbs$p.value
+  es.outlier <- FALSE
+  if (p.value < alpha) {es.outlier <- TRUE}
+  columna.sin.outlier <- data.frame[-clave.mas.alejado.media, indice.columna]
+  lilliefors <- lillie.test(columna.sin.outlier)
+  es.distrib.norm = TRUE
+  p.value.test.normalidad <- lilliefors$p.value
+  if (lilliefors$p.value < alpha) {es.distrib.norm = FALSE}
+  
+  
+  return(list(nombre.columna = nombre.columna, clave.mas.alejado.media = clave.mas.alejado.media, valor.mas.alejado.media = valor.mas.alejado.media, nombre.mas.alejado.media = nombre.mas.alejado.media, es.outlier = es.outlier, p.value = p.value, p.value.test.normalidad = p.value.test.normalidad, es.distrib.norm = es.distrib.norm))
+  
+}
+```
+
+Se puede comprobar si la función produce los resultados correctos aplicándola en el caso anterior del que se conocen los resultados:
+
+```{r}
+test.Grubbs.datos.artificiales = test_Grubbs(dataset.num, indice.columna)
+
+test.Grubbs.datos.artificiales$nombre.columna
+test.Grubbs.datos.artificiales$clave.mas.alejado.media
+test.Grubbs.datos.artificiales$valor.mas.alejado.media
+test.Grubbs.datos.artificiales$nombre.mas.alejado.media
+test.Grubbs.datos.artificiales$es.outlier
+test.Grubbs.datos.artificiales$p.value
+test.Grubbs.datos.artificiales$p.value.test.normalidad
+test.Grubbs.datos.artificiales$es.distrib.norm
+
+```
+
+## Trabajando con varias columnas
+
+En este apartado se van a aplicar los procesos anteriores a todas las columnas del conjunto de datos.
+
+### Outliers IQR
+
+Se empieza con los outliers IQR: se calculan los outliers IQR con respecto a cada una de las columnas. Para ello, se emplearán las funciones de `OutliersFunciones_byCubero.R`. Se construirán dos variables para almacenar los registros con y sin duplicados.
+
+Para ver los nombres de los registros se usará la función `nombres_filas` disponible en `OutliersFunciones_byCubero.R`:
+
+```{r}
+claves.outliers.IQR.en.alguna.columna <- claves_outliers_IQR_en_alguna_columna(dataset.num, 1.5)
+
+claves.outliers.IQR.en.alguna.columna
+
+claves.outliers.IQR.extremos.en.alguna.columna <- claves_outliers_IQR_en_alguna_columna(dataset.num, 3)
+
+claves.outliers.IQR.extremos.en.alguna.columna
+
+
+claves.outliers.IQR.en.mas.de.una.columna <- unique(claves.outliers.IQR.en.alguna.columna[duplicated(claves.outliers.IQR.en.alguna.columna)])
+
+claves.outliers.IQR.en.alguna.columna <- unique(claves.outliers.IQR.en.alguna.columna)
+
+claves.outliers.IQR.en.mas.de.una.columna
+
+
+claves.outliers.IQR.extremos.en.mas.de.una.columna <- unique(claves.outliers.IQR.extremos.en.alguna.columna[duplicated(claves.outliers.IQR.extremos.en.alguna.columna)])
+
+claves.outliers.IQR.extremos.en.alguna.columna <- unique(claves.outliers.IQR.extremos.en.alguna.columna)
+
+claves.outliers.IQR.extremos.en.mas.de.una.columna
+
+claves.outliers.IQR.extremos.en.alguna.columna 
+
+nombres_filas(dataset.num, claves.outliers.IQR.en.mas.de.una.columna)
+
+nombres_filas(dataset.num, claves.outliers.IQR.en.alguna.columna)
+
+
+nombres_filas(dataset.num, claves.outliers.IQR.extremos.en.mas.de.una.columna)
+
+nombres_filas(dataset.num, claves.outliers.IQR.extremos.en.alguna.columna)
+```
+
+Se obtienen los valores normalizados de estos outliers:
+
+```{r}
+head(dataset.num.norm[claves.outliers.IQR.en.alguna.columna,])
+head(dataset.num.norm[claves.outliers.IQR.extremos.en.alguna.columna,])
+```
+
+Se obtiene esta misma información de forma gráfica. Para ello, se emplea el vector `claves.outliers.IQR.en.alguna.columna`para pasarlo como parámetro a la función `diag_caja_juntos`. De esta forma, se obtienen los diagramas de cajas de todas las variables y se muestran aquellos registros que son outliers con respecto a alguna columna. Se realiza este proceso con los outliers normales y con los extremos:
+
+```{r, warning=FALSE}
+diag_caja_juntos(dataset.num.norm[,-7], "Outliers en alguna columna", claves.outliers.IQR.en.alguna.columna)
+
+diag_caja_juntos(dataset.num.norm[,-7], "Outliers extremos en alguna columna", claves.outliers.IQR.extremos.en.alguna.columna)
+```
+
+Se puede apreciar como el paciente nº 198, únicamente presenta un comportamiento fuera de lo normal en la variable escogida. El caso más llamativo es el del paciente nº 116, que presenta valores extremos en 3 de las variables siendo especialmente llamativo el caso de la variable `degree_spondylolisthesis`, done el valor podría ser atribuido a una medición errónea. Otro caso interesante es el del paciente nº 168, que presenta un valor realmente bajo en la variable `pelvic_radius`.
+
+### Tests de Hipótesis
+
+En este apartado se va a ejecutar el test de Grubbs sobre todas las columnas del dataset. En primer lugar, se analizarán los histogramas de las variables para ver aquellas que se ajustan a una distribución Normal, empleando los histogramas generados con las funciones `fitdist` y `denscomp`:
+
+```{r, warning=FALSE}
+par(mfrow=c(2,3))
+invisible(sapply(c(1:ncol(dataset.num[,-7])), function (x) denscomp(fitdist(dataset.num[, x], "norm"), xlab = names(dataset.num)[x])))
+```
+
+Como se vio en apartados anteriores, la variable `pelvic_incidence` es la que menos se asemeja a una Normal. En cualquier caso, se mantiene por ahora. Se continúa aplicando el test de Grubbs a todas las columnas. Para ello, se emplea la función `test_Grubbs` creada anteriormente sobre todas las columnas. (Se excluye la variable clase)
+
+```{r}
+sapply(c(1:ncol(dataset.num[,-7])), function (x) test_Grubbs(dataset.num[,-7], x))
+```
+
+Tras realizar los test podemos ver como únicamente las variables `lumbar_lordosis_angle` y `sacral_slope` siguen una distribución normal (no se puede rechazar que sigan una normal), al menos según el test de Kolmogorov-Smirnov con la variante de Lilliefors. Finalmente, los únicos outliers que se pueden aceptar como tal son los pacientes nº198 y nº116, detectados en las variables `lumbar_lordosis_angle` y `sacral_slope` respectivamente.
+
+# Outliers Multivariantes
+
+El objetivo de este apartado es encontrar los outliers multivariantes, empleando técnicas estadísticas, técnicas basadas en distancias y técnicas basadas en clustering.
+
+## Métodos estadísticos basados en la distancia de Mahalanobis
+
+Para encontrar outliers multivariantes con técnicas estadísticas, se van a aplicar las que se basan en la distancia de Mahalanobis, cuya finalidad es ofrecer una garantía estadística de que, si un valor se etiqueta como outlier, realmente lo es. Por lo tanto, la hipótesis nula establece que no lo es, de forma que si se rechaza, es seguro de que sí es un outlier:
+
+***H0: El valor más alejado del centro de la distribución no es un outlier***
+
+### Hipótesis de Normalidad
+
+Los métodos basados en la distancia de Mahalanobis asumen que la distribución conjunta es una distribución Normal multivariante. Por lo tanto, la hipótesis nula es realmente la siguiente:
+
+***H0: El valor con mayor distancia de Mahalanobis al centro de la distribución viene de la misma distribución Normal multivariante que el resto de datos***
+
+Una condición necesaria para que un conjunto de variables siga una distribución Normal multivariante es que cada una de ellas siga una distribución normal 1-variante. Por lo tanto, lo primero que se debe hacer es trabajar únicamente con aquellas variables que siguen una Normal. Como se ha visto en apartado anterior, únicamente la variable `lumbar_lordosis_angle` sigue una distribución normal. De todos modos, se vuelve a realizar el test de Grubbs para obtener el vector de booleanos que nos indica que variables siguen una distribución normal:
+
+```{r}
+
+es_normal = function (columna){
+  t_g <- test_Grubbs(columna)
+  return (t_g$es.distrib.norm)
+}
+
+son.col.normales <- sapply(c(1:ncol(dataset.num[,-7])) , function(x) es_normal(dataset.num[x]))
+dataset.num.distrib.norm <- dataset.num[ , son.col.normales]
+
+son.col.normales
+head(dataset.num.distrib.norm)
+```
+
+Ahora bien, el que las variables sigan una distribución Normal 1-variante no garantiza que el conjunto de ellas siga una distribución Normal multivariante. Es una condición necesaria pero no suficiente. Por lo tanto, será necesario lanzar un test de Normalidad multivariante. Para ello, se empleará la función `mvn` de la librería `MVN`.
+
+```{r}
+test.MVN <- mvn(dataset.num.distrib.norm, mvnTest = "energy")
+test.MVN$multivariateNormality["MVN"]
+test.MVN$multivariateNormality["p value"]
+```
+
+El test establece que la distribución conjunta de las variables `lumbar_lordosis_angle y sacral_solpe` no es una Normal multivariante. Por lo tanto, no se debería aplicar el método basado en la distancia de Mahalanobis. De todas formas, se procede a lanzarlo para ver si se detecta algún valor que, aunque no pueda considerarse un outlier con garantía estadística, al menos proporcione alguna información interesante.
+
+### Tests de hipótesis para detectar outliers
+
+Se va a usar la función `cerioli2010.fsrmcd.test`. La función `cerioli2010.fsrmcd.test` obtiene los outliers calculando las distancias de Mahalanobis usando una estimación de la matriz de covarianzas, según el método robusto MCD -minimum covariance determinant.
+
+Existen dos formas de llamar a la función `cerioli2010.fsrmcd.test` dependiendo del tipo de test que se desee realizar:
+
+1.  Unico test:
+
+    ***H0: El valor con mayor distancia de Mahalanobis viene de la misma distribución Normal multivariante que el resto de datos***
+
+    En este caso se delimita el valor de significación alpha a 0.05
+
+2.  Multiples tests:
+
+    ***∀i=1⋯n, H0~i~: El i-ésimo valor viene de la misma distribuciónNormal multivariante que el resto de datos.***
+
+    En este caso se delimita el valor de significación alpha a 1−(1−α)^1/n^
+
+Se establece una semilla para que los resultados aleatorios puedan ser reproducidos:
+
+```{r}
+set.seed(2)
+
+test.individual <- cerioli2010.fsrmcd.test(datamat = dataset.num.distrib.norm, signif.alpha = 0.05)
+
+claves.test.individual <- which(test.individual$outliers)
+
+nombres.test.individual <- nombres_filas(dataset.num.distrib.norm, claves.test.individual)
+
+
+test.interseccion <- cerioli2010.fsrmcd.test(datamat = dataset.num.distrib.norm, signif.alpha = (1-(1-0.05)^(1/nrow(dataset.num.distrib.norm))))
+
+claves.test.interseccion <- which(test.interseccion$outliers)
+
+nombres.test.interseccion <- nombres_filas(dataset.num.distrib.norm, claves.test.interseccion)
+
+claves.test.individual
+nombres.test.individual
+claves.test.interseccion
+nombres.test.interseccion
+```
+
+Sólo hay garantía estadística de que sea un outlier el que tiene mayor valor de distancia de Mahalanobis. Para ver cuál es ese valor, basta ordenar decrecientemente el vector `mahdist.rw` y seleccionar el primero. Se muestra también un gráfico de todas las distancias de Mahalanobis obtenidas para que aprecie cuál es el mayor valor:
+
+```{r}
+clave.mayor.dist.Mah.individual <- order(test.individual$mahdist.rw, decreasing = TRUE)[1]
+nombre.mayor.dist.Mah.individual <- nombres_filas(dataset.num.distrib.norm, clave.mayor.dist.Mah.individual)
+clave.mayor.dist.Mah.interseccion <- order(test.interseccion$mahdist.rw, decreasing = TRUE)[1]
+nombre.mayor.dist.Mah.interseccion <- nombres_filas(dataset.num.distrib.norm, clave.mayor.dist.Mah.interseccion)
+
+clave.mayor.dist.Mah.individual
+nombre.mayor.dist.Mah.individual
+clave.mayor.dist.Mah.interseccion
+nombre.mayor.dist.Mah.interseccion
+
+
+plot(test.individual$mahdist.rw[order(test.individual$mahdist.rw)], main = "Test individual", ylab = "mahdist")
+
+plot(test.interseccion$mahdist.rw[order(test.interseccion$mahdist.rw)], main = "Test intersección", ylab = "mahdist")
+```
+
+Por lo tanto, se puede concluir que los *test individual e intersección* rechazarían la hipótesis de que el registro con clave 198 (`paciente nº198`) no es un outlier. Así pues, se acepta como outlier. Aunque hay que tener en cuenta que no se ha podido determinar que la distribución subyacente fuese una Normal, por lo que no se tiene garantía estadística de que, efectivamente, dicho registro sea un outlier.
+
+## Visualización de datos con un Biplot
+
+El BiPlot es una herramienta gráfica que permite tener una idea aproximada de los valores de los registros con respecto a todas las variables, así como las correlaciones entre dichas variables.
+
+Para obtener el biplot se emplea la función `biplot_2_colores` disponible en `OutliersFunciones_byCubero.R`.
+
+```{r}
+biplot.outliers.IQR <- biplot_2_colores(dataset.num[,-7], 
+                                       claves.outliers.IQR.en.alguna.columna, 
+                                       titulo.grupo.a.mostrar = "Outliers IQR",
+                                       titulo ="Biplot Outliers IQR")
+
+biplot.outliers.IQR.extremos <- biplot_2_colores(dataset.num[,-7], 
+                                       claves.outliers.IQR.extremos.en.alguna.columna, 
+                                       titulo.grupo.a.mostrar = "Outliers IQR",
+                                       titulo ="Biplot Outliers extremos IQR")
+
+biplot.outliers.IQR
+biplot.outliers.IQR.extremos
+
+```
+
+La suma de los porcentajes explicados es bastante alta (22.4 + 51.3 = 73.7%) por lo que la representación obtenida es una buena aproximación. Se puede apreciar como el paciente nº 198 está bastante alejado en la variable pellvic_tilt y en lumbar_lordosis_angle.
+
+## Métodos basados en distancias: LOF
+
+Los métodos estadísticos tienen como finalidad proporcionar garantía estadística de que los valores etiquetados como outliers efectivamente lo son. Para ello, presuponen que los datos siguen una distribución estadística concreta. Sin embargo, en las situaciones en las que este requisito no se cumple, no se puede aplicar dichos métodos. En estos casos, se van a aplicar otros métodos que no ofrecen garantía estadística, pero son capaces de determinar cómo de alejado está cada punto al resto de los datos. Para ello, se usa una medida de distancia euclídea. Para que unas variables no dominen sobre otras se tendrá que, obligatoriamente, normalizar los datos. Se usará la normalización por z-score. De los métodos basados en distancia, se aplicará LOF.
+
+En primer lugar, se debe determinar el número de vecinos más cercanos que se usará en el cómputo del método LOF. A falta de más información, se elige arbitrariamente el valor de 5. SSe llama a la función `LOF` de la librería `DDoutlier`:
+
+```{r}
+num.vecinos.lof <- 5
+lof.scores <- LOF(dataset = dataset.num.norm, k = num.vecinos.lof)
+plot(lof.scores[order(lof.scores, decreasing = TRUE)], main = "Scores LOF", ylab = "Score")
+```
+
+Se puede apreciar que hay un valor bastante más alto que el resto de valores, además se puede observar un grupo de seis valores con *scores* más altos que el resto de datos. Se va a analizar dicho valor.
+
+```{r}
+num.outliers <- 1
+claves.outliers.lof <- order(lof.scores, decreasing = TRUE)[1:num.outliers]
+nombres.outliers.lof <- nombres_filas(dataset.num.norm, claves.outliers.lof)
+
+claves.outliers.lof
+nombres.outliers.lof
+```
+
+Se muestran también los valores normalizados de dicho registro:
+
+```{r}
+dataset.num.norm[claves.outliers.lof, ]
+```
+
+Se puede observar que este paciente muestra valores muy altos en `pelvic_incidence` y `sacral_slope`. También muestra un valor extremadamente elevado en `degree_spondylosinthesis`.
+
+Se procede a ver las posibles interacciones de dos variables. Para ello, se muestran los diagramas de dispersión correspondientes a los cruces 2 a 2 de las variables. Para ello, se ejecuta el siguiente código, que muestra en rojo el registro correspondiente al `paciente nº116`:
+
+```{r}
+clave.max.outlier.lof <- claves.outliers.lof[1]
+
+colores <- rep("black", times = nrow(dataset.num.norm[,-7]))
+colores[clave.max.outlier.lof] <- "red"
+pairs(dataset.num.norm[,-7], pch = 19,  cex = 0.5, col = colores, lower.panel = NULL)
+```
+
+Se puede apreciar que, por ejemplo, hay una correlación entre `pelvic_incidence` y `pellvic_tillt`. En este sentido, el valor del `paciente nº116` contradice esta correlación ya que se sitúa alejado de la nube de puntos. Además, es el único paciente que muestra este comportamiento en este conjunto de variables.
+
+Si se observa la combinación `lumbar_lordosis_angle` y `sacral_slope`, se aprecia que hay una correlación entre ambas variables, pero el registro del `paciente nº116` se sitúa de nuevo en una zona aislada lejos la nube de puntos de alta densidad a su izquierda.
+
+A continuación, se procede a ver de una forma gráfica la interacción de todas las variables. Para ello, se emplea un biplot. Sin embargo, la información obtenida no es exacta y es proporcional al porcentaje de variación explicado por las componentes principales. En el caso estudiado, la suma de la variabilidad explicada por las dos componentes principales es bastante alta (de un 70%) y por tanto la aproximación es buena.
+
+```{r}
+biplot.max.outlier.lof = biplot_2_colores(dataset.num.norm[,-7], clave.max.outlier.lof, titulo = "Mayor outlier LOF")
+biplot.max.outlier.lof
+```
+
+El `paciente nº 116` está en una zona con poca densidad y bastante alejada de la zona de alta densidad. Se puede apreciar como el paciente muestra valores anómalos para las variables `pelvic_incidence`, `lumbar_lordosis_angle` y `degree_spondylolisthsesis`.
+
+## Métodos basados en Clustering
+
+En este apartado se va a ver otro método basado en distancias. Se detectarán outliers según la distancia de cada dato al centroide de su cluster. El centroide podrá ser cualquiera (podrá provenir de un k-means o ser un medoide, por ejemplo).
+
+### Clustering usando k-means
+
+A falta de más información, se fija el número de outliers en 5 y el de clusters en 2. Además, como los resultados del método de clustering k-means dependen de la elección inicial de los centroides, se fija un valor de la semilla con la función `set.seed` para que, de esta forma, no varíen los resultados de una ejecución a otra.
+
+```{r, echo=FALSE}
+num.outliers = 5
+num.clusters = 2
+```
+
+Se construye el modelo kmeans (`modelo.kmeans`) llamando a la función `kmeans`.
+
+```{r}
+set.seed(2)
+
+km <- kmeans(dataset.num.norm, num.clusters)
+
+asignaciones.clustering.kmeans <- km$cluster
+
+centroides.normalizados <- km$centers
+
+centroides.desnormalizados = desnormaliza(dataset.num, centroides.normalizados)
+
+
+head(asignaciones.clustering.kmeans)
+centroides.normalizados
+centroides.desnormalizados
+```
+
+Ya se pueden calcular los outliers como aquellos datos que más se alejan del centroide del cluster al que ha sido asignado. Esto se va a hacer construyendo una función `top_clustering_outliers`:
+
+```{r}
+# Implemente esta función de la siguiente forma: si un dato d_i ha sido asignado a un cluster C_k, calculamos la distancia euclídea dist_i de d_i al centroide de C_k. Los outliers serán los datos con mayores valores de dist_i. Para ello, debe calcular el vector de todas las distancias distancias, ordenarlo y quedarse con los primeros (tantos como indique la variable num.outliers) De esa forma obtendrá el vector claves. La función top_clustering_outliers devolverá una lista con ambos valores, a saber, distancias y claves. Para calcular las distancias use la siguiente función disponible en OutliersFunciones_byCubero.R: 
+# 
+# distancias_a_centroides(datos.normalizados, asignaciones.clustering, datos.centroides.normalizados)
+
+#######################################################################
+# Calcula las distancias de los datos a los centroides
+# y se queda con los primeros (tantos como indica num.outliers)
+# Devuelve una lista con las claves de dichos registros y las
+# correspondientes distancias a sus centroides
+
+top_clustering_outliers = function(datos.normalizados, 
+                                   asignaciones.clustering, 
+                                   datos.centroides.normalizados, 
+                                   num.outliers){
+  
+ distancias <- distancias_a_centroides(datos.normalizados, asignaciones.clustering, datos.centroides.normalizados)
+ claves <- order(distancias, decreasing = TRUE)[1:num.outliers]
+ 
+ return(list(distancias = distancias[claves], claves = claves))
+}
+```
+
+```{r}
+
+top.outliers.kmeans <- top_clustering_outliers(dataset.num.norm , 
+                                              asignaciones.clustering.kmeans, 
+                                              centroides.normalizados, 
+                                              num.outliers)
+claves.outliers.kmeans <- top.outliers.kmeans$claves 
+nombres.outliers.kmeans <- nombres_filas(dataset.num, claves.outliers.kmeans)
+distancias.outliers.centroides <- top.outliers.kmeans$distancias
+
+claves.outliers.kmeans
+
+nombres.outliers.kmeans
+
+distancias.outliers.centroides
+```
+
+A continuación, se muestra un biplot con la información de los outliers y de los clusters. Para ello, se emplea la función `biplot_outliers_clustering`. También se muestra un diagrama de cajas conjunto con más variables:
+
+```{r, warning=FALSE}
+biplot_outliers_clustering(dataset.num[,-7], 
+                           titulo = "Outliers k-means",
+                           asignaciones.clustering = asignaciones.clustering.kmeans,
+                           claves.outliers = claves.outliers.kmeans)
+
+diag_caja_juntos(dataset.num[,-7], "Outliers k-means", claves.outliers.kmeans)
+```
+
+Se puede observar cómo tanto el paciente 116 como el 198, que ya se habían tratado en apartados anteriores, vuelven aparecer en el biplot, adicionalmente aparecen los pacientes 76, 96 y 163. En el diagrama de cajas de puede comprobar como estos pacientes muestran valores extremos en alguna variable, en el caso del paciente 163 se observa como muestra estos valores en las variables `pelvic_incidende` y `pelvic_radius`, y se queda cerca en el `sacral_slope`. Por otro lado, los pacientes 76 y 96 presentan comportamientos similares en los casos en los que adoptan valores extremos en la variable `degree_spondylolisthesis`. El paciente 198 solo muestra un valor anómalo en `lumbar_lordosis_angle` como ya se habia observado anteriormente. Finalmente, el paciente 116 es el que tiene más valores anómalos, siendo especialmente notable el valor extremo en `degree_spondylolisthesis`.
+
+### Clustering usando medoides
+
+En este apartado se va a usar el método de clustering PAM (Partition around medoids) Previamente se debe calcular la matriz de distancias de todos con todos usando la función `dist`. A continuación, se usa la función `pam` del paquete `cluster`:
+
+```{r}
+set.seed(2)
+matriz.distancias <- dist(dataset.num.norm)
+modelo.pam        <- pam(matriz.distancias , k = num.clusters)
+
+asignaciones.clustering.pam <- modelo.pam$clustering   
+nombres.medoides <- modelo.pam$medoids    
+medoides <- dataset.num[nombres.medoides, ]
+medoides.normalizados <- dataset.num.norm[nombres.medoides, ]
+
+nombres.medoides
+medoides
+medoides.normalizados
+```
+
+Se calculan ahora los top outliers. Para ello se llama a la función `top_clustering_outliers`. Se muestra también el biplot correspondiente llamando a la función `biplot_outliers_clustering` y se muestran los nombres de los registros obtenidos con la función `nombres_filas`:
+
+```{r}
+top.outliers.pam <- top_clustering_outliers(dataset.num.norm, asignaciones.clustering.pam, medoides.normalizados, num.outliers)
+
+claves.outliers.pam <- top.outliers.pam$claves
+
+nombres.outliers.pam <- nombres_filas(dataset.num, claves.outliers.pam)
+
+
+claves.outliers.pam
+nombres.outliers.pam
+biplot_outliers_clustering(dataset.num[,-7], titulo="Outliers PAM", asignaciones.clustering = asignaciones.clustering.pam, claves.outliers = claves.outliers.pam)
+```
+
+Se puede observar que, en este caso, al usar la partición creada por `pam`, los outliers encontrados corresponden a registros que están en la periferia del biplot, es decir que son outliers porque tienen un valor extremo en alguna de las variables y no tanto porque tengan una combinación anómala de valores en distintas variables. Aún así, se encuentran los mismos outliers que en el proceso anterior con kmeans.
+
+## Análisis de los outliers multivariantes *puros*
+
+A continuación, se va a automatizar el proceso de detección de outliers multivariantes **puros**. Para ello, se van a identificar a los outliers en una única variable usando el método IQR: empleando el objeto `claves.outliers.IQR.en.alguna.columna`. Bastará por tanto ver los outliers que son multivariantes, pero no son 1-variantes (con respecto a ninguna variable). Este proceso se puede aplicar sobre cualquiera de los métodos vistos anteriormente (estadísticos, basados en distancia o basados en clustering). Se va a emplear el método LOF, que es uno de los que mejores resultados dan en una gran variedad de situaciones.
+
+Así pues, se van a calcular los registros que están en `claves.outliers.lof` pero no están en `claves.outliers.IQR.en.alguna.columna`. Para mostrar los nombres de los registros se emplea la función `nombres_filas`.
+
+```{r}
+claves.outliers.IQR.en.alguna.columna
+claves.outliers.lof
+claves.outliers.lof.no.IQR <- setdiff(claves.outliers.lof, claves.outliers.IQR.en.alguna.columna)
+claves.outliers.lof.no.IQR
+nombres.outliers.lof.no.IQR <- nombres_filas(dataset.num, claves.outliers.lof.no.IQR)
+nombres.outliers.lof.no.IQR
+```
+
+Como se puede observar, no se encuentra ningún outlier LOF multivariante puro.
+
+Se procede aumentar el número de outliers a estudiar. En apartados anteriores, cuando se obtubo el grafico de scores LOF, había un grupo adicional de 6 valores que estaba algo separado del resto de datos. A continuación se procede a estudiar los outliers considerando ese grupo como outlier, es decir, se toman los 7 primeros valores del vector `lof.scores`:
+
+```{r}
+claves.outliers.lof <- order(lof.scores, decreasing = TRUE)[1:7]
+claves.outliers.lof.no.IQR <- setdiff(claves.outliers.lof, claves.outliers.IQR.en.alguna.columna)
+nombres.outliers.lof.no.IQR <- nombres_filas(dataset.num, claves.outliers.lof.no.IQR)
+
+biplot.outliers.lof.no.IQR <- biplot_2_colores(dataset.num[,-7], claves.outliers.lof.no.IQR, titulo.grupo.a.mostrar = "Outliers LOF", titulo = "Outliers LOF (excluidos los que son IQR)")
+
+claves.outliers.IQR.en.alguna.columna
+claves.outliers.lof
+claves.outliers.lof.no.IQR
+nombres.outliers.lof.no.IQR
+biplot.outliers.lof.no.IQR
+
+dataset.num.norm[claves.outliers.lof.no.IQR, ]
+```
+
+Únicamente el paciente nº52 ha sido determinado como outlier LOF puro. En los datos normalizados poodemos ver como únicamente tiene un valor algo elevado (2.17) en la variable `pelvic_tilt`.
+
+# Resumen Final
+
+## Metodología
+
+La metodología aplicada ha sido la descrita en el guion de prácticas: *Guion de Prácticas de la parte de Detección de Anomalías*, adaptando los casos necesarios al dataset empleado.
+
+## Análisis de resultados
+
+**Conjunto de datos**
+
+Se ha trabajado con la base de datos `vertebral` disponible en [ODDS](http://odds.cs.stonybrook.edu/vertebral-dataset/). Se han empleado todas las variables, excluyendo la variable clase en los casos donde no era necesaria.
+
+Se ha aplicado la normalización por z-score en aquellos métodos que así lo han requerido.
+
+**Outliers en una variable**
+
+-   **Método IQR**
+
+    Se han encontrado tanto outliers extremos (alejados de la media más de tres veces la distancia intercuartil) como outliers no extremos (alejados de la media más de 1.5 veces la distancia intercuartil).
+
+    El `paciente nº 198` se dispara (por arriba) en `lumbar_lordosis_angle` pero no tanto en el resto de columnas. Parece por tanto un paciente bastante equilibrado que tiene una curvatura inferior de la espalda pronunciada.
+
+    Es llamativo el caso del `Paciente nº 116` que se dispara en varias columnas: `pelvic_incidence`, `sacral_slope` y `degree_spondylolisthesis`. Estos valores nos indican que el paciente tiene una dolencia severa en la parte inferior de la espalda, lo cual tiene sentido puesto que la incidencia pélvica y el Sacral Slope son mediciones muy similares localizadas en la parte inferior de la espalda, además la espondilolistesis es más frecuente en la zona baja de la espalda.
+
+-   **Test de Hipótesis**
+
+    El test de Kolmogorov-Smirnov con variante de Llilliefors rechaza la Normalidad en todas las variables excepto `lumbar_lordosis_angle` y `sacral_slope`, como el test no puede rechazar la hipótesis nula en ambas variables, se concluye que dichas variables puede considerarse que siguen una Normal. (No con certeza estadística, puesto que aceptamos la hipótesis nula)
+
+    Por otra parte, se puede ver que el outlier IQR (paciente nº 198) puede considerarse realmente outlier con garantía estadística.
+
+**Outliers multivariantes**
+
+-   **Visualización con biplot**
+
+    La suma de los porcentajes explicados es bastante alta (22.4 + 51.3 = 73.7%), por lo que la representación obtenida es una buena aproximación.
+
+-   **Métodos estadísticos usando la distancia de Mahalanobis**
+
+    La distribución conjunta de las variables `lumbar_lordosis_angle` y `sacral_slope` no es una Normal multivariante. Por lo tanto, no se debería aplicar el método basado en la distancia de Mahalanobis. De todas formas, se ha lanzado para ver si de detecta algún valor que, aunque no pueda considerarse un outlier con garantía estadística, al menos proporcione alguna información interesante.
+
+    Tanto el *test individual* como el *test de intersección* nos devuelven outliers. El *test individual* devuelve 20 outliers, mientras que el *test intersección* devuelve 4. Hay que recordar que sólo hay garantía estadística de que sea un outlier el que tiene mayor valor de distancia de Mahalanobis. Dicho valor es el `Paciente nº198`. Dicho registro ya fue etiquetado como outlier 1-variante por el test de Grubbs ya que tenía un valor muy alto en la variable (`lumbar_lordosis_angle`). En cualquier caso, cabe destacar que al no haber podido establecer que la distribución subyacente sea una Normal multivariante, no se puede concluir con garantía estadística que, efectivamente, sea un outlier multivariante.
+
+-   **LOF**
+
+    El gráfico de *scores* mostró un registro destacado: `paciente nº116`. El paciente obtuvo un *score* alto debido a que tiene valores extremos en varias variables, por lo que resulta de interés como outlier multivariante. La relación de las variables en las que adopta valores extremos es la que se ha explicado anteriormente, la incidencia pélvica y el Sacral Slope son mediciones muy similares localizadas en la unión entre la columna vertebral y la pelvis, y la espondilolistesis es más frecuente en la zona baja de la espalda. Aún así, no se puede concluir que se trate de un outlier multivariante puro.
+
+    En una segunda ejecución de LOF se incluyó un grupo de otros 6 registros con altos *scores*. De entre los cuales únicamente el paciente nº 52 fue determinado como outlier multivariante puro, el cual no presentaba valores extremos en ninguna de las variables, salvo en `pelvic_tillt`, que muestra un valor elevado, aunque no puede considerarse extremo.
+
+    En resumen, el método `LOF` ha detectado outliers interesantes como por ejemplo el `paciente nº 116` que destaca por mostrar espondilolistesis severa, tal vez fruto de la incidencia pélvica y el sacral slope, o el `paciente nº 52` que, a diferencia del paciente nº 116, no destaca en ninguna de las métricas y no tiene un diagnostico evidente según los datos estudiados.
+
+-   **Métodos basados en clustering**
+
+    Con el método de k-means (ordenando outliers según la distancia euclídea a los centroides) se han detectado como outliers pacientes como el nº116 y el nº 198, que ya se habían tratado con otros métodos, adicionalmente aparecen los pacientes 76, 96 y 163 como outliers.
+
+    El `paciente nº 163`, al tener valores bastante extremos (sin llegar a ser muy extremos) en **varias** variables, la suma de los efectos de dichas variables ha podido determinar que tenga un *score* alto.
+
+    En el caso de los pacientes 76 y 96, pese a que solo presentaban valores extremos en una variable, el hecho de que en otras variables tuviesen valores elevados (pero no extremos), también ha podido afectar a sus scores.
