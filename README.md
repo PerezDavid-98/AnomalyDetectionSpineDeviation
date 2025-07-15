@@ -5,7 +5,13 @@ For this project I did an Anomaly Detection Study using the `R` programming lang
 The whole study, including implementations, can be read (in Spanish) as an `HTML` file in this repo or in the next link: [AnomalyDetectionSpineDeviation](https://perezdavid-98.github.io/AnomalyDetectionSpineDeviation/AnomalyDetectionSpineDeviation.html).
 
 ## Dataset
-The dataset used is the Vertebral Column Dataset from the UCI Machine Learning Repository, which has been modified for outlier detection, obtained from: [ODDS](http://odds.cs.stonybrook.edu/vertebral-dataset/). This dataset has 240 instances where the following convention is used for the classes: 
+The dataset used is the Vertebral Column Dataset from the UCI Machine Learning Repository, which has been modified for outlier detection, obtained from: [ODDS](http://odds.cs.stonybrook.edu/vertebral-dataset/).
+
+> [!WARNING] 
+The ODDS (Outlier Detection DataSets) page cannot be reached as of the moment of writing this README. It returns an `SSL_ERROR_NO_CYPHER_OVERLAP` error. 
+I will link a 3rd party information page: ([paperswithcode](https://paperswithcode.com/dataset/odds)) about the ODDS page and delete this warning if the ODDS page is up again.
+
+This dataset has 240 instances where the following convention is used for the classes: 
 
 - Normal (NO)
 - Abnormal (AB)
